@@ -1,0 +1,3 @@
+[workspace]
+members = ["ecs", "ecs_derive"]
+resolver = "2"
