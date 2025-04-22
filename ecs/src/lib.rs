@@ -1,167 +1,192 @@
+use std::{
+    cell::UnsafeCell,
+    mem::{self, MaybeUninit},
+};
+
+use hibitset::BitSet;
 use rayon_ecs_derive::Lend;
 
-trait AsStore<T> {
-    fn as_store(&self) -> &Store<T>;
+type Index = u32;
+type Gen = u32;
+
+#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
+struct Entity {
+    gen: Gen,
+    index: Index,
 }
 
-trait AsStoreMut<T> {
-    fn as_store_mut(&mut self) -> &mut Store<T>;
+trait Store {
+    type Item;
+
+    fn mask(&self) -> &BitSet;
+    fn get(&self, index: Index) -> Option<&Self::Item>;
+    fn get_mut(&mut self, index: Index) -> Option<&mut Self::Item>;
+    fn insert(&mut self, index: Index, value: Self::Item) -> Option<Self::Item>;
+    fn remove(&mut self, index: Index) -> Option<Self::Item>;
 }
 
 #[derive(Default)]
-struct Store<T> {
-    vec: Vec<T>,
+struct MaskStore<S> {
+    mask: BitSet,
+    store: S,
 }
 
-impl<T> AsStore<T> for Store<T> {
-    fn as_store(&self) -> &Store<T> {
-        self
-    }
-}
+impl<S: RawStore> Store for MaskStore<S> {
+    type Item = S::Item;
 
-impl<T> AsStoreMut<T> for Store<T> {
-    fn as_store_mut(&mut self) -> &mut Store<T> {
-        self
-    }
-}
-
-impl<T> Store<T> {
-    fn get(&self, entity: Entity) -> Option<&T> {
-        self.vec.get(entity as usize)
+    fn mask(&self) -> &BitSet {
+        &self.mask
     }
 
-    fn insert(&mut self, entity: Entity, value: T) {
-        self.vec[entity as usize] = value;
-    }
-}
-
-struct Read<'w, T> {
-    store: &'w Store<T>,
-}
-
-impl<'w, T> AsStore<T> for Read<'w, T> {
-    fn as_store(&self) -> &'w Store<T> {
-        self.store
-    }
-}
-
-impl<'w, T> Read<'w, T> {
-    fn get(&self, entity: Entity) -> Option<&'w T> {
-        self.store.get(entity)
-    }
-}
-
-macro_rules! Read {
-    ($obj:ident, $field:ident) => {
-        Read {
-            store: $obj.$field.as_store(),
+    fn get(&self, index: Index) -> Option<&Self::Item> {
+        if self.mask.contains(index) {
+            Some(unsafe { self.store.get(index) })
+        } else {
+            None
         }
-    };
-}
-
-struct Write<'w, T> {
-    store: &'w mut Store<T>,
-}
-
-impl<'w, T> AsStore<T> for Write<'w, T> {
-    fn as_store(&self) -> &Store<T> {
-        self.store
-    }
-}
-
-impl<'w, T> AsStoreMut<T> for Write<'w, T> {
-    fn as_store_mut(&mut self) -> &mut Store<T> {
-        self.store
-    }
-}
-
-impl<'w, T> Write<'w, T> {
-    fn get(&self, entity: Entity) -> Option<&T> {
-        self.store.get(entity)
     }
 
-    fn insert(&mut self, entity: Entity, value: T) {
-        self.store.insert(entity, value);
-    }
-}
-
-macro_rules! Write {
-    ($obj:ident, $field:ident) => {
-        Write {
-            store: $obj.$field.as_store_mut(),
+    fn get_mut(&mut self, index: Index) -> Option<&mut Self::Item> {
+        if self.mask.contains(index) {
+            Some(unsafe { self.store.get_mut(index) })
+        } else {
+            None
         }
-    };
+    }
+
+    fn insert(&mut self, index: Index, mut value: Self::Item) -> Option<Self::Item> {
+        if self.mask.contains(index) {
+            mem::swap(&mut value, unsafe { self.store.get_mut(index) });
+            Some(value)
+        } else {
+            self.mask.add(index);
+            unsafe { self.store.insert(index, value) };
+            None
+        }
+    }
+
+    fn remove(&mut self, index: Index) -> Option<Self::Item> {
+        if self.mask.remove(index) {
+            Some(unsafe { self.store.remove(index) })
+        } else {
+            None
+        }
+    }
 }
 
-type Entity = u32;
+trait RawStore {
+    type Item;
+
+    unsafe fn get(&self, index: Index) -> &Self::Item;
+    unsafe fn get_mut(&self, index: Index) -> &mut Self::Item;
+    unsafe fn insert(&mut self, index: Index, value: Self::Item);
+    unsafe fn remove(&mut self, index: Index) -> Self::Item;
+}
 
 #[derive(Default)]
-struct Foo;
+struct VecStore<T> {
+    vec: Vec<UnsafeCell<MaybeUninit<T>>>,
+}
+
+unsafe impl<T: Send> Send for VecStore<T> {}
+unsafe impl<T: Sync> Sync for VecStore<T> {}
+
+impl<T> RawStore for VecStore<T> {
+    type Item = T;
+
+    unsafe fn get(&self, index: Index) -> &T {
+        let index = index as usize;
+        unsafe { &*(*self.vec.get_unchecked(index).get()).as_ptr() }
+    }
+
+    unsafe fn get_mut(&self, index: Index) -> &mut T {
+        let index = index as usize;
+        unsafe { &mut *(*self.vec.get_unchecked(index).get()).as_mut_ptr() }
+    }
+
+    unsafe fn insert(&mut self, index: Index, c: T) {
+        let index = index as usize;
+        if self.vec.len() <= index {
+            let delta = index + 1 - self.vec.len();
+            self.vec.reserve(delta);
+            unsafe { self.vec.set_len(index + 1) };
+        }
+        unsafe { *self.vec.get_unchecked_mut(index) = UnsafeCell::new(MaybeUninit::new(c)) };
+    }
+
+    unsafe fn remove(&mut self, index: Index) -> T {
+        let index = index as usize;
+        unsafe { (*self.vec.get_unchecked(index).get()).as_mut_ptr().read() }
+    }
+}
 
 #[derive(Default)]
-struct Bar;
+struct Foo(u8);
+
+#[derive(Default)]
+struct Bar(u8);
+
+type Entities = MaskStore<VecStore<Gen>>;
+type Foos = MaskStore<VecStore<Foo>>;
+type Bars = MaskStore<VecStore<Bar>>;
+
+fn new_entity(entities: &mut Entities) -> Entity {
+    let gen = 0; // TODO: actual entity allocation.
+    let idx = entities.store.vec.len() as u32;
+    entities.insert(idx, gen);
+    Entity { index: idx, gen }
+}
 
 #[derive(Default)]
 struct World {
-    entities: Store<Entity>,
-    foos: Store<Foo>,
-    bars: Store<Bar>,
+    entities: Entities,
+    foos: Foos,
+    bars: Bars,
 }
 
-impl World {
-    fn new_entity(&mut self) -> Entity {
-        let entity = self.entities.vec.len() as u32;
-        self.entities.vec.push(entity);
-        let capacity = self.entities.vec.len();
-        self.foos.vec.resize_with(capacity, Default::default);
-        self.bars.vec.resize_with(capacity, Default::default);
-        entity
+#[derive(Lend)]
+struct MutFoos<'w> {
+    foos: &'w mut Foos,
+}
+
+impl<'w> MutFoos<'w> {
+    fn set_foo(&mut self, index: Index, val: u8) {
+        self.foos.insert(index, Foo(val));
     }
 }
 
 #[derive(Lend)]
-struct WriteFoos<'w> {
-    foos: Write<'w, Foo>,
+struct MutBars<'w> {
+    bars: &'w mut Bars,
 }
 
-impl<'w> WriteFoos<'w> {
-    fn set_foo(&mut self, ent: Entity) {
-        self.foos.insert(ent, Foo);
+impl<'w> MutBars<'w> {
+    fn set_bar(&mut self, index: Index, val: u8) {
+        self.bars.insert(index, Bar(val));
     }
 }
 
 #[derive(Lend)]
-struct WriteBars<'w> {
-    bars: Write<'w, Bar>,
+struct GetBars<'w> {
+    bars: &'w Bars,
 }
 
-impl<'w> WriteBars<'w> {
-    fn set_bar(&mut self, ent: Entity) {
-        self.bars.insert(ent, Bar);
+impl<'w> GetBars<'w> {
+    fn bar(&self, index: Index) -> Option<&'w Bar> {
+        self.bars.get(index)
     }
 }
 
 #[derive(Lend)]
-struct ReadBars<'w> {
-    bars: Read<'w, Bar>,
+struct MutFoosBars<'w> {
+    first: MutFoos<'w>,
+    second: MutBars<'w>,
 }
 
-impl<'w> ReadBars<'w> {
-    fn get_bar(&self, ent: Entity) -> Option<&'w Bar> {
-        self.bars.get(ent)
-    }
-}
-
-#[derive(Lend)]
-struct Compound<'w> {
-    first: WriteFoos<'w>,
-    second: WriteBars<'w>,
-}
-
-impl<'w> Compound<'w> {
-    fn get_foo_bar(&self, ent: Entity) -> Option<(&Foo, &Bar)> {
-        let foo = self.first.foos.get(ent)?;
-        let bar = self.second.bars.get(ent)?;
+impl<'w> MutFoosBars<'w> {
+    fn foo_bar(&self, index: Index) -> Option<(&Foo, &Bar)> {
+        let foo = self.first.foos.get(index)?;
+        let bar = self.second.bars.get(index)?;
         Some((foo, bar))
     }
 }
@@ -174,17 +199,17 @@ mod tests {
     fn it_works() {
         let mut w = World::default();
 
-        let ent = w.new_entity();
-        let mut first = WriteFoos!(w);
-        let mut second = WriteBars!(w);
+        let e = new_entity(&mut w.entities);
+        let mut foos = MutFoos!(w);
+        let mut bars = MutBars!(w);
 
-        first.set_foo(ent);
-        second.set_bar(ent);
+        foos.set_foo(e.index, 1);
+        bars.set_bar(e.index, 1);
 
-        let second_read = ReadBars!(second);
-        let bar = second_read.get_bar(ent).unwrap();
+        let bars_again = GetBars!(bars);
+        let bar = bars_again.bar(e.index).unwrap();
 
-        let compound = Compound!(w);
-        let (foo, bar) = compound.get_foo_bar(ent).unwrap();
+        let compound = MutFoosBars!(w);
+        let (foo, bar) = compound.foo_bar(e.index).unwrap();
     }
 }

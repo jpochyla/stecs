@@ -4,7 +4,7 @@ use std::fmt::Write;
 use std::str::FromStr;
 
 use myn::prelude::*;
-use proc_macro::{Delimiter, Ident, Span, TokenStream};
+use proc_macro::{Delimiter, Ident, Span, TokenStream, TokenTree};
 
 #[proc_macro_derive(Lend)]
 pub fn derive_lend(input: TokenStream) -> TokenStream {
@@ -19,15 +19,35 @@ pub fn derive_lend(input: TokenStream) -> TokenStream {
     let mut fields = String::new();
     for Field {
         field_name,
-        field_type,
+        field_ref,
     } in struct_fields
     {
-        let _ = write!(
-            fields,
-            r#"
-            {field_name}: {field_type}!($obj, {field_name}),
-            "#
-        );
+        match field_ref {
+            FieldRef::Ref => {
+                let _ = write!(
+                    fields,
+                    r#"
+                    {field_name}: &$obj.{field_name},
+                    "#
+                );
+            }
+            FieldRef::Mut => {
+                let _ = write!(
+                    fields,
+                    r#"
+                    {field_name}: &mut $obj.{field_name},
+                    "#
+                );
+            }
+            FieldRef::Type(ident) => {
+                let _ = write!(
+                    fields,
+                    r#"
+                    {field_name}: {ident}!($obj, {field_name}),
+                    "#
+                );
+            }
+        }
     }
 
     let code = format!(
@@ -50,7 +70,7 @@ pub fn derive_lend(input: TokenStream) -> TokenStream {
 
 struct Field {
     field_name: Ident,
-    field_type: Ident,
+    field_ref: FieldRef,
 }
 
 struct Struct {
@@ -84,17 +104,52 @@ impl Struct {
             input.parse_visibility()?;
             let name = input.try_ident()?;
             input.expect_punct(':')?;
-            let ty = input.try_ident()?;
-            let _ = input.parse_path(); // Skip any possible type params.
+
+            let is_ref = input.next_if(|t| is_punct(t, '&')).is_some();
+
+            let field_ref = if is_ref {
+                let has_lifetime = input.next_if(|t| is_punct(t, '\'')).is_some();
+                if has_lifetime {
+                    let _ = input.try_ident()?;
+                }
+                let is_mut = input.next_if(|t| is_ident(t, "mut")).is_some();
+                let _ = input.try_ident()?;
+
+                if is_mut {
+                    FieldRef::Mut
+                } else {
+                    FieldRef::Ref
+                }
+            } else {
+                let ty = input.try_ident()?;
+
+                FieldRef::Type(ty)
+            };
+
+            let _ = input.parse_path(); // Skip the type remainder.
             let _ = input.expect_punct(',');
 
             let field = Field {
                 field_name: name,
-                field_type: ty,
+                field_ref,
             };
             args.push(field);
         }
 
         Ok(args)
     }
+}
+
+enum FieldRef {
+    Ref,
+    Mut,
+    Type(Ident),
+}
+
+fn is_punct(token: &TokenTree, char: char) -> bool {
+    matches!(token, TokenTree::Punct(punct) if punct.as_char() == char)
+}
+
+fn is_ident(token: &TokenTree, name: &str) -> bool {
+    matches!(token, TokenTree::Ident(ident) if ident.to_string() == name)
 }
