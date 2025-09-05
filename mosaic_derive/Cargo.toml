@@ -1,5 +1,5 @@
 [package]
-name = "rayon_ecs_derive"
+name = "mosaic_derive"
 version = "0.1.0"
 edition = "2021"
 

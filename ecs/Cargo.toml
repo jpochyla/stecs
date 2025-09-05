@@ -1,8 +1,8 @@
 [package]
-name = "rayon_ecs"
+name = "stecs"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-rayon_ecs_derive = { path = "../ecs_derive" }
+mosaic_derive = { path = "../mosaic_derive" }
 hi_sparse_bitset = { version = "*" }

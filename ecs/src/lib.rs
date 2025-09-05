@@ -2,7 +2,7 @@ mod entity;
 mod query;
 mod store;
 
-use rayon_ecs_derive::Lend;
+use mosaic_derive::Mosaic;
 
 use self::entity::*;
 use self::query::*;
@@ -37,7 +37,7 @@ impl World {
     }
 }
 
-#[derive(Lend)]
+#[derive(Mosaic)]
 struct MutFoos<'w> {
     foos: &'w mut Foos,
 }
@@ -48,7 +48,7 @@ impl<'w> MutFoos<'w> {
     }
 }
 
-#[derive(Lend)]
+#[derive(Mosaic)]
 struct MutBars<'w> {
     bars: &'w mut Bars,
 }
@@ -59,7 +59,7 @@ impl<'w> MutBars<'w> {
     }
 }
 
-#[derive(Lend)]
+#[derive(Mosaic)]
 struct GetBars<'w> {
     bars: &'w Bars,
 }
@@ -70,7 +70,7 @@ impl<'w> GetBars<'w> {
     }
 }
 
-#[derive(Lend)]
+#[derive(Mosaic)]
 struct MutFoosBars<'w> {
     first: MutFoos<'w>,
     second: MutBars<'w>,

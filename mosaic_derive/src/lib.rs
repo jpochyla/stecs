@@ -6,8 +6,8 @@ use std::str::FromStr;
 use myn::prelude::*;
 use proc_macro::{Delimiter, Ident, Span, TokenStream, TokenTree};
 
-#[proc_macro_derive(Lend)]
-pub fn derive_lend(input: TokenStream) -> TokenStream {
+#[proc_macro_derive(Mosaic)]
+pub fn derive_mosaic(input: TokenStream) -> TokenStream {
     let Struct {
         struct_name,
         struct_fields,
