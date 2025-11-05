@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crate::{
-    store::{MaskStore, Store, VecStore},
     BitSet, Handle, Index,
+    store::{MaskStore, Store, VecStore},
 };
 
 pub type Handles = MaskStore<VecStore<Handle>>;
@@ -16,12 +16,12 @@ pub struct Entities {
 }
 
 impl Entities {
-    pub fn allocate(&mut self) -> Handle {
+    pub fn allocate(&mut self) -> (Handle, Index) {
         let index = self.index_alloc.allocate();
         let handle = self.handle_alloc.allocate();
         self.index_map.insert(handle, index);
         self.handles.insert(index, handle);
-        handle
+        (handle, index)
     }
 
     pub fn free(&mut self, handle: Handle) -> Option<Index> {

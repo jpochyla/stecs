@@ -1,8 +1,8 @@
-use hi_sparse_bitset::{iter::IndexIter, BitSetInterface};
+use hi_sparse_bitset::{BitSetInterface, iter::IndexIter};
 
 use crate::{
-    store::{MaskStore, RawStore, Store},
     BitSet, Index,
+    store::{MaskStore, RawStore, Store},
 };
 
 pub trait Query {
@@ -26,6 +26,13 @@ pub trait IntoQuery {
         Self: Sized,
     {
         QueryIter::new(self.into_query())
+    }
+
+    fn maybe(self) -> MaybeQuery<Self::IntoQuery>
+    where
+        Self: Sized,
+    {
+        MaybeQuery(self.into_query())
     }
 }
 
@@ -72,6 +79,32 @@ impl<Q: Query> Iterator for QueryIter<Q> {
     }
 }
 
+pub struct MaybeQuery<Q: Query> {
+    inner: Q,
+    mask: BitSet,
+}
+
+impl<Q: Query> Query for MaybeQuery<Q> {
+    type Item = Option<Q::Item>;
+    type Access = (Q::Mask, Q::Access);
+    type Mask = &'a BitSet where Q: for<'a> 'a;
+
+    fn open(self) -> (Self::Mask, Self::Access) {
+        let (mask, access) = self.0.open();
+        (BitSetAll, (mask, access))
+    }
+
+    unsafe fn get((mask, access): &Self::Access, index: Index) -> Self::Item {
+        // Aliasing requirements must be upheld by the caller, but we ensure that no invalid index
+        // is passed to our inner `Query`.
+        if mask.contains(index) {
+            Some(unsafe { Q::get(access, index) })
+        } else {
+            None
+        }
+    }
+}
+
 pub struct QueryTuple<T>(T);
 
 pub trait BitSetAnd {
@@ -90,7 +123,7 @@ impl<'a, S: RawStore> Query for &'a MaskStore<S> {
     }
 
     unsafe fn get(access: &Self::Access, index: Index) -> Self::Item {
-        access.get(index)
+        unsafe { access.get(index) }
     }
 }
 
@@ -104,7 +137,7 @@ impl<'a, S: RawStore> Query for &'a mut MaskStore<S> {
     }
 
     unsafe fn get(access: &Self::Access, index: Index) -> Self::Item {
-        access.get_mut(index)
+        unsafe { access.get_mut(index) }
     }
 }
 
@@ -132,7 +165,7 @@ macro_rules! define_query {
             #[allow(non_snake_case)]
             unsafe fn get(access: &Self::Access, index: Index) -> Self::Item {
                 let ($first, $($rest),*) = access;
-                ($first::get($first, index), $($rest::get($rest, index)),*)
+                unsafe { ($first::get($first, index), $($rest::get($rest, index)),*) }
             }
         }
     };
